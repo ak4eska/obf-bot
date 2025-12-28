@@ -8,6 +8,7 @@ const path = require('path');
 const axios = require('axios');
 const fs = require('fs');
 const formatSize = require('../handlers/formatSize');
+const moveToErrorFolder = require('../handlers/moveToErrorFolder');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -47,9 +48,19 @@ module.exports = {
     }
 
     const tempId = Date.now();
-    const inputPath = path.join(__dirname, `input_${tempId}.lua`);
+    const inputPath = path.join(
+      process.cwd(),
+      'cache',
+      `input_${tempId}.lua`
+    );
 
     try {
+      const cacheDir = path.join(process.cwd(), 'cache');
+      if (!fs.existsSync(cacheDir)) {
+         fs.mkdirSync(cacheDir, { recursive: true });
+      }
+      
+      
       // download file
       const res = await axios.get(file.url, {
         responseType: 'arraybuffer'
@@ -74,55 +85,66 @@ module.exports = {
       }, 120000);
 
       child.on('close', async (code) => {
-        clearTimeout(killer);
-
-        if (code !== 0) {
-          return interaction.editReply({
-            embeds: [
-              new EmbedBuilder()
-                .setDescription(`Error:\n\`\`\`${stderr || 'Unknown error'}\`\`\``)
-                .setColor('#04588e')
-            ]
-          });
+      clearTimeout(killer);
+    
+      if (code !== 0 || stderr) {
+        moveToErrorFolder(inputPath);
+    
+        let reason = stderr?.trim() || 'Unknown error';
+        if (stderr.includes('Unexpected Token "/"')) {
+          reason =
+            'Lua 5.1 does not support `//` Use math.floor(a / b)';
         }
-
-        const obfuscatedPath = inputPath.replace(
-          /\.lua$/,
-          '.obfuscated.lua'
-        );
-
-        if (!fs.existsSync(obfuscatedPath)) {
-          return interaction.editReply({
-            embeds: [
-              new EmbedBuilder()
-                .setDescription('Output file not found')
-                .setColor('#04588e')
-            ]
-          });
-        }
-        
-        const inputSize = fs.statSync(inputPath).size;
-        const outputSize = fs.statSync(obfuscatedPath).size;
-        const ratio = ((outputSize / inputSize) * 100).toFixed(2);
-
-        await interaction.editReply({
+    
+        return interaction.editReply({
           embeds: [
             new EmbedBuilder()
-              .setTitle('Obfuscation success!')
+              .setTitle('Obfuscation Failed')
+              .setDescription(reason)
               .setColor('#04588e')
-              .addFields(
-                { name: 'input Size', value: formatSize(inputSize), inline: true },
-                { name: 'Output Size', value: formatSize(outputSize), inline: true },
-                { name: 'Ratio', value: `${formatSize(ratio)}%`, inline: true }
-              )
-              .setFooter({ text: 'Powered by Prometheus'})
-          ],
-          files: [obfuscatedPath]
+          ]
         });
-
-        fs.unlinkSync(inputPath);
-        fs.unlinkSync(obfuscatedPath);
+      }
+    
+      const obfuscatedPath = inputPath.replace(
+        /\.lua$/,
+        '.obfuscated.lua'
+      );
+    
+      if (!fs.existsSync(obfuscatedPath)) {
+        moveToErrorFolder(inputPath);
+    
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setDescription('Output file not found')
+              .setColor('#04588e')
+          ]
+        });
+      }
+    
+      const inputSize = fs.statSync(inputPath).size;
+      const outputSize = fs.statSync(obfuscatedPath).size;
+      const ratio = ((outputSize / inputSize) * 100).toFixed(2);
+    
+      await interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('Obfuscation Success!')
+            .setColor('#04588e')
+            .addFields(
+              { name: 'Input Size', value: formatSize(inputSize), inline: true },
+              { name: 'Output Size', value: formatSize(outputSize), inline: true },
+              { name: 'Ratio', value: `${ratio}%`, inline: true }
+            )
+            .setFooter({ text: 'Powered by Prometheus' })
+        ],
+        files: [obfuscatedPath]
       });
+    
+      fs.unlinkSync(inputPath);
+      fs.unlinkSync(obfuscatedPath);
+    });
 
     } catch (e) {
       console.error(e);
